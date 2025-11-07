@@ -117,12 +117,6 @@ The system is a distributed trading automation platform that reads order instruc
 **Responsibilities**:
 - Manage broker configuration (API keys, endpoints, credentials)
 - Execute buy/sell orders
-- **Order Splitting**: Automatically split large orders into multiple smaller orders
-  - Divide quantity when it exceeds configured maximum order size (default: 1000)
-  - Execute split orders sequentially (respecting rate limits)
-  - Aggregate results from all split orders
-  - Calculate weighted average execution price
-  - Continue execution even if some splits fail (partial execution)
 - Handle rate limiting
 - Implement retry logic with adaptive strategies
 - Error handling and recovery
@@ -224,7 +218,6 @@ type Order struct {
 - `REDIS_DB`: Redis database number (default: 0)
 - `LOG_LEVEL`: Logging level (DEBUG, INFO, WARN, ERROR)
 - `WORKER_POOL_SIZE`: Number of concurrent workers in trigger module (default: 5)
-- `MAX_ORDER_SIZE`: Maximum quantity per order before splitting (default: 1000)
 
 ### Configuration Files
 - Broker configuration (JSON/YAML)

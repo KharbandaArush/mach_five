@@ -64,14 +64,8 @@ func NewBrokerManager(cfg *config.Config, log *logger.Logger) (*BrokerManager, e
 	}, nil
 }
 
-// ExecuteOrderWithRetry executes an order with adaptive retry logic and order splitting
+// ExecuteOrderWithRetry executes an order with adaptive retry logic
 func (bm *BrokerManager) ExecuteOrderWithRetry(ctx context.Context, order models.Order, maxRetries int) (models.ExecutionResult, error) {
-	// Check if order splitting is needed
-	if bm.config.Broker.OrderSplitting.Enabled && order.Quantity > bm.config.Broker.OrderSplitting.MaxOrderSize {
-		return bm.executeSplitOrder(ctx, order, maxRetries)
-	}
-
-	// Execute single order (no splitting needed)
 	return bm.executeSingleOrder(ctx, order, maxRetries)
 }
 
@@ -118,95 +112,6 @@ func (bm *BrokerManager) executeSingleOrder(ctx context.Context, order models.Or
 	}
 
 	return result, fmt.Errorf("order execution failed after %d attempts: %w", maxRetries+1, lastErr)
-}
-
-// executeSplitOrder splits a large order into multiple smaller orders and executes them
-func (bm *BrokerManager) executeSplitOrder(ctx context.Context, order models.Order, maxRetries int) (models.ExecutionResult, error) {
-	maxSize := bm.config.Broker.OrderSplitting.MaxOrderSize
-	totalQuantity := order.Quantity
-
-	// Calculate number of split orders needed
-	numSplits := (totalQuantity + maxSize - 1) / maxSize // Ceiling division
-
-	bm.logger.Info("Splitting order %s: quantity %d into %d orders (max size: %d)", 
-		order.ID, totalQuantity, numSplits, maxSize)
-
-	var allResults []models.ExecutionResult
-	var totalExecutedQuantity int
-	var totalExecutedPrice float64
-	var hasError bool
-	var lastError error
-
-	// Execute split orders sequentially
-	for i := 0; i < numSplits; i++ {
-		// Calculate quantity for this split
-		splitQuantity := maxSize
-		if i == numSplits-1 {
-			// Last order gets the remainder
-			splitQuantity = totalQuantity - (i * maxSize)
-		}
-
-		// Create split order
-		splitOrder := order
-		splitOrder.ID = fmt.Sprintf("%s_split_%d_%d", order.ID, i+1, numSplits)
-		splitOrder.Quantity = splitQuantity
-
-		bm.logger.Info("Executing split order %d/%d: %s (quantity: %d)", 
-			i+1, numSplits, splitOrder.ID, splitQuantity)
-
-		// Execute split order with retry
-		result, err := bm.executeSingleOrder(ctx, splitOrder, maxRetries)
-		if err != nil {
-			bm.logger.Error("Split order %s failed: %v", splitOrder.ID, err)
-			hasError = true
-			lastError = err
-			// Continue with other splits even if one fails
-			continue
-		}
-
-		allResults = append(allResults, result)
-		totalExecutedQuantity += result.ExecutedQuantity
-		if result.ExecutedPrice > 0 {
-			// Average price calculation (weighted by quantity)
-			if totalExecutedPrice == 0 {
-				totalExecutedPrice = result.ExecutedPrice
-			} else {
-				// Weighted average
-				totalExecutedPrice = (totalExecutedPrice*float64(totalExecutedQuantity-splitQuantity) + 
-					result.ExecutedPrice*float64(splitQuantity)) / float64(totalExecutedQuantity)
-			}
-		}
-
-		// Small delay between split orders to respect rate limits
-		if i < numSplits-1 {
-			time.Sleep(100 * time.Millisecond)
-		}
-	}
-
-	// Aggregate results
-	aggregatedResult := models.ExecutionResult{
-		OrderID:          order.ID,
-		Success:          !hasError && totalExecutedQuantity > 0,
-		ExecutedAt:       time.Now(),
-		ExecutedQuantity: totalExecutedQuantity,
-		ExecutedPrice:    totalExecutedPrice,
-	}
-
-	if hasError {
-		aggregatedResult.ErrorMessage = fmt.Sprintf("Some split orders failed. Executed: %d/%d", 
-			totalExecutedQuantity, totalQuantity)
-		bm.logger.Warn("Order %s partially executed: %d/%d shares", 
-			order.ID, totalExecutedQuantity, totalQuantity)
-	} else {
-		bm.logger.Info("Order %s fully executed: %d/%d shares across %d split orders", 
-			order.ID, totalExecutedQuantity, totalQuantity, numSplits)
-	}
-
-	if lastError != nil && totalExecutedQuantity == 0 {
-		return aggregatedResult, fmt.Errorf("all split orders failed: %w", lastError)
-	}
-
-	return aggregatedResult, nil
 }
 
 // shouldRetry determines if an error is retryable

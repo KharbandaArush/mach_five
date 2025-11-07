@@ -6,10 +6,6 @@
   "rate_limit": {
     "requests_per_second": 3,
     "burst_size": 5
-  },
-  "order_splitting": {
-    "enabled": true,
-    "max_order_size": 1000
   }
 }
 

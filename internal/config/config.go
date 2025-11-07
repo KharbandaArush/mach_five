@@ -35,25 +35,18 @@ type RedisConfig struct {
 
 // BrokerConfig holds broker configuration
 type BrokerConfig struct {
-	ConfigPath     string
-	Type           string
-	APIKey         string
-	APISecret      string
-	BaseURL        string
-	RateLimit      RateLimitConfig
-	OrderSplitting OrderSplittingConfig
+	ConfigPath string
+	Type       string
+	APIKey     string
+	APISecret  string
+	BaseURL    string
+	RateLimit  RateLimitConfig
 }
 
 // RateLimitConfig holds rate limiting configuration
 type RateLimitConfig struct {
 	RequestsPerSecond int
 	BurstSize         int
-}
-
-// OrderSplittingConfig holds order splitting configuration
-type OrderSplittingConfig struct {
-	MaxOrderSize int // Maximum quantity per order before splitting
-	Enabled      bool // Whether order splitting is enabled
 }
 
 // LoggingConfig holds logging configuration
@@ -101,13 +94,6 @@ func LoadConfig() (*Config, error) {
 	cfg.Broker.RateLimit.RequestsPerSecond, _ = strconv.Atoi(getEnv("BROKER_RATE_LIMIT_RPS", "10"))
 	cfg.Broker.RateLimit.BurstSize, _ = strconv.Atoi(getEnv("BROKER_RATE_LIMIT_BURST", "20"))
 
-	// Order splitting config
-	cfg.Broker.OrderSplitting.MaxOrderSize, _ = strconv.Atoi(getEnv("MAX_ORDER_SIZE", "1000"))
-	cfg.Broker.OrderSplitting.Enabled = getEnv("ORDER_SPLITTING_ENABLED", "true") == "true"
-	if cfg.Broker.OrderSplitting.MaxOrderSize <= 0 {
-		cfg.Broker.OrderSplitting.MaxOrderSize = 1000 // Default to 1000
-	}
-
 	// Logging config
 	cfg.Logging.Level = getEnv("LOG_LEVEL", "INFO")
 	cfg.Logging.ReadLog = getEnv("READ_LOG_PATH", "./logs/read-module.log")
@@ -138,12 +124,11 @@ func (c *Config) loadBrokerConfigFromFile() error {
 	}
 
 	var fileConfig struct {
-		Type           string               `json:"type"`
-		APIKey         string               `json:"api_key"`
-		APISecret      string               `json:"api_secret"`
-		BaseURL        string               `json:"base_url"`
-		RateLimit      RateLimitConfig      `json:"rate_limit"`
-		OrderSplitting OrderSplittingConfig `json:"order_splitting"`
+		Type      string          `json:"type"`
+		APIKey    string          `json:"api_key"`
+		APISecret string          `json:"api_secret"`
+		BaseURL   string          `json:"base_url"`
+		RateLimit RateLimitConfig `json:"rate_limit"`
 	}
 
 	if err := json.Unmarshal(data, &fileConfig); err != nil {
@@ -165,9 +150,6 @@ func (c *Config) loadBrokerConfigFromFile() error {
 	}
 	if fileConfig.RateLimit.RequestsPerSecond > 0 {
 		c.Broker.RateLimit = fileConfig.RateLimit
-	}
-	if fileConfig.OrderSplitting.MaxOrderSize > 0 {
-		c.Broker.OrderSplitting = fileConfig.OrderSplitting
 	}
 
 	return nil

@@ -1,0 +1,12 @@
+{
+  "type": "kite",
+  "api_key": "your-kite-api-key",
+  "api_secret": "your-kite-access-token",
+  "base_url": "https://kite.zerodha.com",
+  "rate_limit": {
+    "requests_per_second": 3,
+    "burst_size": 5
+  }
+}
+
+

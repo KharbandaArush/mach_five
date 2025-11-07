@@ -39,8 +39,17 @@ func (t *Trigger) ExecuteDueOrders(ctx context.Context) error {
 	startTime := time.Now()
 	t.logger.Info("Starting order execution cycle")
 
+	// Get current time in IST (orders are scheduled in IST)
+	istLocation, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		t.logger.Warn("Failed to load IST timezone, using UTC: %v", err)
+		istLocation = time.UTC
+	}
+	now := time.Now().In(istLocation)
+	
+	t.logger.Debug("Checking for orders due at %s IST", now.Format("2006-01-02 15:04:05 IST"))
+	
 	// Get orders due for execution
-	now := time.Now()
 	orders, err := t.cache.GetOrdersDueForExecution(now)
 	if err != nil {
 		return fmt.Errorf("failed to get orders due for execution: %w", err)

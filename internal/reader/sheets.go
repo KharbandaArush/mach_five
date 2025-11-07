@@ -163,7 +163,13 @@ func (r *SheetsReader) readSheet(rangeStr, side string) ([]models.Order, error) 
 // J: Lots (int) - Quantity
 func (r *SheetsReader) parseRows(rows [][]interface{}, side string) ([]models.Order, error) {
 	var orders []models.Order
-	now := time.Now()
+	// Get current time - we'll use IST for comparison
+	istLocation, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		r.logger.Warn("Failed to load IST timezone: %v", err)
+		istLocation = time.UTC
+	}
+	now := time.Now().In(istLocation)
 
 	for i, row := range rows {
 		// Need at least 9 columns (B through J, indexed 0-8)
@@ -253,16 +259,27 @@ func (r *SheetsReader) parseRows(rows [][]interface{}, side string) ([]models.Or
 			quantity = 1
 		}
 
-		// Combine date and time
+		// Load IST timezone (Asia/Kolkata)
+		istLocation, err := time.LoadLocation("Asia/Kolkata")
+		if err != nil {
+			r.logger.Warn("Failed to load IST timezone, using UTC: %v", err)
+			istLocation = time.UTC
+		}
+
+		// Combine date and time in IST timezone
+		// Google Sheet times are in IST, so we interpret them as IST
 		scheduledTime := time.Date(
 			date.Year(), date.Month(), date.Day(),
 			t.Hour(), t.Minute(), t.Second(), 0,
-			time.UTC,
+			istLocation,
 		)
 
-		// Skip if scheduled time is in the past
-		if scheduledTime.Before(now) {
-			r.logger.Debug("Row %d: scheduled time %s is in the past, skipping", i+3, scheduledTime)
+		// Get current time in IST for comparison
+		nowIST := time.Now().In(istLocation)
+
+		// Skip if scheduled time is in the past (in IST)
+		if scheduledTime.Before(nowIST) {
+			r.logger.Debug("Row %d: scheduled time %s IST is in the past, skipping", i+3, scheduledTime.Format("2006-01-02 15:04:05 IST"))
 			continue
 		}
 

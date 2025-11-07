@@ -30,7 +30,7 @@ The system is a distributed trading automation platform that reads order instruc
     - E: `bse_code` (string) - BSE code
     - F: `symbol` (string) - Trading symbol (e.g., "NSE:RELIANCE" or "BSE:RELIANCE")
     - G: `execute_date` (string) - Date format: YYYY-MM-DD
-    - H: `execute_time` (string) - Time format: HH:MM:SS or HH:MM
+    - H: `execute_time` (string) - Time format: HH:MM:SS or HH:MM (interpreted as IST timezone)
     - I: `Money Needed` (float) - Money required
     - J: `Lots` (int) - Number of lots (quantity)
   - **Sheet names**:

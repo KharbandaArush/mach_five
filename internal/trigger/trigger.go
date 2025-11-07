@@ -37,7 +37,7 @@ func NewTrigger(cfg *config.Config, cache *cache.RedisCache, brokerMgr *broker.B
 // ExecuteDueOrders executes all orders that are due for execution
 func (t *Trigger) ExecuteDueOrders(ctx context.Context) error {
 	startTime := time.Now()
-	t.logger.Info("Starting order execution cycle")
+	t.logger.Section("🚀 Order Execution Cycle Started")
 
 	// Get current time in IST (orders are scheduled in IST)
 	istLocation, err := time.LoadLocation("Asia/Kolkata")
@@ -56,11 +56,26 @@ func (t *Trigger) ExecuteDueOrders(ctx context.Context) error {
 	}
 
 	if len(orders) == 0 {
-		t.logger.Info("No orders due for execution")
+		t.logger.Info("⏳ No orders due for execution at this time")
 		return nil
 	}
 
-	t.logger.Info("Found %d orders due for execution", len(orders))
+	t.logger.Success("Found %d orders due for execution", len(orders))
+	
+	// Log orders in table format
+	headers := []string{"Order ID", "Symbol", "Side", "Qty", "Price", "Scheduled Time"}
+	rows := make([][]string, 0, len(orders))
+	for _, order := range orders {
+		rows = append(rows, []string{
+			truncateString(order.ID, 20),
+			truncateString(order.Symbol, 20),
+			order.Side,
+			fmt.Sprintf("%d", order.Quantity),
+			fmt.Sprintf("%.2f", order.Price),
+			order.ScheduledTime.Format("15:04:05 IST"),
+		})
+	}
+	t.logger.Table(headers, rows)
 
 	// Use worker pool to execute orders concurrently
 	orderChan := make(chan models.Order, len(orders))
@@ -82,7 +97,7 @@ func (t *Trigger) ExecuteDueOrders(ctx context.Context) error {
 	wg.Wait()
 
 	duration := time.Since(startTime)
-	t.logger.Info("Order execution cycle completed in %v", duration)
+	t.logger.Success("✅ Order execution cycle completed in %v", duration)
 
 	return nil
 }
@@ -116,7 +131,7 @@ func (t *Trigger) executeOrder(ctx context.Context, workerID int, order models.O
 		metrics.SchedulerDelay = 0
 	}
 
-	t.logger.Info("Worker %d processing order %s (scheduler delay: %v)", 
+	t.logger.Info("👷 Worker %d processing order %s (⏱️  scheduler delay: %v)", 
 		workerID, order.ID, metrics.SchedulerDelay)
 
 	// Try to acquire lock to prevent duplicate execution
@@ -154,7 +169,7 @@ func (t *Trigger) executeOrder(ctx context.Context, workerID int, order models.O
 		metrics.CompletedAt = time.Now()
 		metrics.TotalTime = time.Since(metrics.StartedAt)
 		t.logProfilingMetrics(metrics, false, err.Error())
-		t.logger.Error("Order %s execution failed: %v", order.ID, err)
+		t.logger.Error("❌ Order %s execution failed: %v", order.ID, err)
 		t.removeOrder(order.ID, err.Error())
 		return
 	}
@@ -168,7 +183,20 @@ func (t *Trigger) executeOrder(ctx context.Context, workerID int, order models.O
 	metrics.TotalTime = time.Since(metrics.StartedAt)
 
 	t.logProfilingMetrics(metrics, result.Success, result.ErrorMessage)
-	t.logger.Info("Order %s executed successfully: %+v", order.ID, result)
+	if result.Success {
+		t.logger.Success("✅ Order %s executed successfully", order.ID)
+		t.logger.TableSimple("Execution Details", map[string]string{
+			"Order ID":        order.ID,
+			"Symbol":          order.Symbol,
+			"Side":            order.Side,
+			"Quantity":        fmt.Sprintf("%d", result.ExecutedQuantity),
+			"Price":           fmt.Sprintf("%.2f", result.ExecutedPrice),
+			"Execution ID":    result.ExecutionID,
+			"Executed At":     result.ExecutedAt.Format("15:04:05 IST"),
+		})
+	} else {
+		t.logger.Error("❌ Order %s execution failed: %s", order.ID, result.ErrorMessage)
+	}
 }
 
 // removeOrder removes an order from cache
@@ -227,6 +255,17 @@ func (t *Trigger) MaintainSystemReadiness(ctx context.Context) error {
 
 	t.logger.Debug("System readiness check passed")
 	return nil
+}
+
+// truncateString truncates a string to max length
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }
 
 

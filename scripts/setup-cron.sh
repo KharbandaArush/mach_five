@@ -9,8 +9,8 @@ CRON_USER="root"
 
 echo "Setting up cron job for trigger module..."
 
-# Create cron entry
-CRON_ENTRY="* * * * * $DEPLOY_PATH/bin/trading-system -module=trigger >> $DEPLOY_PATH/logs/trigger-module.log 2>&1"
+# Create cron entry with environment variables
+CRON_ENTRY="* * * * * BROKER_CONFIG_PATH=$DEPLOY_PATH/config/broker-config.json TRIGGER_LOG_PATH=$DEPLOY_PATH/logs/trigger-module.log cd $DEPLOY_PATH && $DEPLOY_PATH/bin/trading-system -module=trigger >> $DEPLOY_PATH/logs/trigger-module.log 2>&1"
 
 # Check if cron entry already exists
 if crontab -u "$CRON_USER" -l 2>/dev/null | grep -q "trading-system.*trigger"; then

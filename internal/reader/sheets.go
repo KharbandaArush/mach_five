@@ -97,7 +97,7 @@ func (r *SheetsReader) readAndCacheOrders() error {
 	if err != nil {
 		r.logger.Error("Failed to read buy orders: %v", err)
 	} else {
-		r.logger.Info("Read %d buy orders", len(buyOrders))
+		r.logger.Success("Read %d buy orders from to_buy sheet", len(buyOrders))
 		allOrders = append(allOrders, buyOrders...)
 	}
 
@@ -107,12 +107,18 @@ func (r *SheetsReader) readAndCacheOrders() error {
 	if err != nil {
 		r.logger.Error("Failed to read sell orders: %v", err)
 	} else {
-		r.logger.Info("Read %d sell orders", len(sellOrders))
+		r.logger.Success("Read %d sell orders from to_sell sheet", len(sellOrders))
 		allOrders = append(allOrders, sellOrders...)
 	}
 
-	r.logger.Info("Total orders read: %d (Buy: %d, Sell: %d)", 
-		len(allOrders), len(buyOrders), len(sellOrders))
+	// Log summary in table format
+	r.logger.Section("📊 Order Reading Summary")
+	r.logger.TableSimple("Orders Read from Google Sheets", map[string]string{
+		"📈 Buy Orders":  fmt.Sprintf("%d", len(buyOrders)),
+		"📉 Sell Orders": fmt.Sprintf("%d", len(sellOrders)),
+		"📦 Total Orders": fmt.Sprintf("%d", len(allOrders)),
+		"🕐 Timestamp":   time.Now().Format("2006-01-02 15:04:05 IST"),
+	})
 
 	// Cache all orders
 	for _, order := range allOrders {

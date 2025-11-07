@@ -22,6 +22,8 @@ Environment="GOOGLE_SHEETS_REFRESH_INTERVAL=1m"
 Environment="REDIS_ADDR=localhost:6379"
 Environment="LOG_LEVEL=INFO"
 Environment="READ_LOG_PATH=/opt/trading-system/logs/read-module.log"
+Environment="BROKER_CONFIG_PATH=/opt/trading-system/config/broker-config.json"
+Environment="TRIGGER_LOG_PATH=/opt/trading-system/logs/trigger-module.log"
 
 [Install]
 WantedBy=multi-user.target

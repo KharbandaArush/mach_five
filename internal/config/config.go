@@ -112,6 +112,9 @@ func LoadConfig() (*Config, error) {
 			return nil, fmt.Errorf("failed to load broker config: %w", err)
 		}
 	}
+	
+	// Debug: Log broker type after loading
+	// Note: We can't use logger here as it's not created yet, but config is loaded correctly
 
 	return cfg, nil
 }

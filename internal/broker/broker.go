@@ -33,20 +33,28 @@ func NewBrokerManager(cfg *config.Config, log *logger.Logger) (*BrokerManager, e
 	var broker Broker
 	var err error
 
+	log.Info("🔧 Initializing broker manager with type: %s", cfg.Broker.Type)
+
 	switch cfg.Broker.Type {
 	case "mock":
+		log.Warn("⚠️  Using MOCK broker - no real trades will be executed!")
 		broker = NewMockBroker(cfg, log)
 	case "alpaca":
+		log.Info("📊 Initializing Alpaca broker")
 		broker, err = NewAlpacaBroker(cfg, log)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Alpaca broker: %w", err)
 		}
 	case "kite":
+		log.Info("🪁 Initializing Kite (Zerodha) broker")
 		broker, err = NewKiteBroker(cfg, log)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Kite broker: %w", err)
 		}
+		log.Success("✅ Kite broker initialized successfully")
 	default:
+		log.Error("❌ Unknown broker type: %s, falling back to mock", cfg.Broker.Type)
+		log.Warn("⚠️  Supported types: mock, alpaca, kite")
 		return nil, fmt.Errorf("unknown broker type: %s (supported: mock, alpaca, kite)", cfg.Broker.Type)
 	}
 

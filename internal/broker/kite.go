@@ -81,11 +81,12 @@ func (k *KiteBroker) ExecuteOrder(ctx context.Context, order models.Order) (mode
 
 	if useAMO {
 		nextOpen := k.marketHours.GetNextMarketOpenTime(now)
-		k.logger.Info("Market is closed. Placing After Market Order (AMO) for order: %s. Will execute at: %s", 
-			order.ID, nextOpen.Format("2006-01-02 15:04:05 IST"))
+		k.logger.Info("🌙 Market is closed. Placing After Market Order (AMO) for order: %s", order.ID)
+		k.logger.Info("   ⏰ Will execute at: %s", nextOpen.Format("2006-01-02 15:04:05 IST"))
 	} else {
-		k.logger.Info("Market is open. Placing regular order: %s (Symbol: %s, Side: %s, Qty: %d)", 
-			order.ID, order.Symbol, order.Side, order.Quantity)
+		k.logger.Info("🌞 Market is open. Placing regular order: %s", order.ID)
+		k.logger.Info("   📊 Symbol: %s | Side: %s | Qty: %d | Price: %.2f", 
+			order.Symbol, order.Side, order.Quantity, order.Price)
 	}
 
 	// Parse symbol to get exchange and trading symbol
@@ -153,10 +154,12 @@ func (k *KiteBroker) ExecuteOrder(ctx context.Context, order models.Order) (mode
 
 	if useAMO {
 		nextOpen := k.marketHours.GetNextMarketOpenTime(now)
-		k.logger.Info("Kite AMO order placed successfully. Order ID: %s. Will execute at: %s", 
-			result.Data.OrderID, nextOpen.Format("2006-01-02 15:04:05 IST"))
+		k.logger.Success("✅ Kite AMO order placed successfully")
+		k.logger.Info("   📝 Kite Order ID: %s", result.Data.OrderID)
+		k.logger.Info("   ⏰ Will execute at: %s", nextOpen.Format("2006-01-02 15:04:05 IST"))
 	} else {
-		k.logger.Info("Kite order placed successfully. Order ID: %s", result.Data.OrderID)
+		k.logger.Success("✅ Kite order placed successfully")
+		k.logger.Info("   📝 Kite Order ID: %s", result.Data.OrderID)
 	}
 
 	return models.ExecutionResult{

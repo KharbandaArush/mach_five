@@ -63,4 +63,9 @@ func (m *MockBroker) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
+// ValidateSymbol always returns true for mock broker (no validation)
+func (m *MockBroker) ValidateSymbol(ctx context.Context, exchange, symbol string) (bool, error) {
+	return true, nil
+}
+
 

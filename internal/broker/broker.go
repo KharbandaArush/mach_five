@@ -3,9 +3,7 @@ package broker
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
-	"time"
 
 	"github.com/mach_five/trading-system/internal/config"
 	"github.com/mach_five/trading-system/internal/logger"
@@ -72,113 +70,22 @@ func NewBrokerManager(cfg *config.Config, log *logger.Logger) (*BrokerManager, e
 	}, nil
 }
 
-// ExecuteOrderWithRetry executes an order with adaptive retry logic
-func (bm *BrokerManager) ExecuteOrderWithRetry(ctx context.Context, order models.Order, maxRetries int) (models.ExecutionResult, error) {
-	return bm.executeSingleOrder(ctx, order, maxRetries)
-}
-
-// executeSingleOrder executes a single order with retry logic
-func (bm *BrokerManager) executeSingleOrder(ctx context.Context, order models.Order, maxRetries int) (models.ExecutionResult, error) {
-	var lastErr error
-	var result models.ExecutionResult
-
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			bm.logger.Info("Retrying order %s (attempt %d/%d)", order.ID, attempt, maxRetries)
-		}
-
-		// Wait for rate limit
-		if err := bm.rateLimit.Wait(ctx); err != nil {
-			return result, fmt.Errorf("rate limit wait failed: %w", err)
-		}
-
-		// Execute order
-		execResult, err := bm.broker.ExecuteOrder(ctx, order)
-		if err == nil {
-			bm.logger.Info("Order %s executed successfully: %+v", order.ID, execResult)
-			return execResult, nil
-		}
-
-		lastErr = err
-		bm.logger.Warn("Order execution failed (attempt %d): %v", attempt+1, err)
-
-		// Determine if we should retry based on error type
-		if !shouldRetry(err) {
-			bm.logger.Error("Order %s failed with non-retryable error: %v", order.ID, err)
-			break
-		}
-
-		// Adaptive retry delay based on error type
-		retryDelay := bm.getRetryDelay(err, attempt)
-		if retryDelay > 0 {
-			select {
-			case <-ctx.Done():
-				return result, ctx.Err()
-			case <-time.After(retryDelay):
-			}
-		}
+// ExecuteOrder executes an order without retries
+func (bm *BrokerManager) ExecuteOrder(ctx context.Context, order models.Order) (models.ExecutionResult, error) {
+	// Wait for rate limit
+	if err := bm.rateLimit.Wait(ctx); err != nil {
+		return models.ExecutionResult{}, fmt.Errorf("rate limit wait failed: %w", err)
 	}
 
-	return result, fmt.Errorf("order execution failed after %d attempts: %w", maxRetries+1, lastErr)
-}
-
-// shouldRetry determines if an error is retryable
-func shouldRetry(err error) bool {
-	if err == nil {
-		return false
+	// Execute order (single attempt, no retries)
+	execResult, err := bm.broker.ExecuteOrder(ctx, order)
+	if err != nil {
+		bm.logger.Error("Order %s execution failed: %v", order.ID, err)
+		return execResult, err
 	}
 
-	errStr := strings.ToLower(err.Error())
-	
-	// Don't retry authentication errors
-	authErrors := []string{"auth", "unauthorized", "forbidden", "401", "403"}
-	for _, substr := range authErrors {
-		if strings.Contains(errStr, substr) {
-			return false
-		}
-	}
-
-	// Don't retry invalid order errors
-	invalidErrors := []string{"invalid", "bad request", "400"}
-	for _, substr := range invalidErrors {
-		if strings.Contains(errStr, substr) {
-			return false
-		}
-	}
-
-	// Retry network errors, rate limits, and server errors
-	retryErrors := []string{"network", "timeout", "rate limit", "429", "500", "502", "503", "504"}
-	for _, substr := range retryErrors {
-		if strings.Contains(errStr, substr) {
-			return true
-		}
-	}
-
-	return false
-}
-
-// getRetryDelay returns the retry delay based on error type and attempt
-func (bm *BrokerManager) getRetryDelay(err error, attempt int) time.Duration {
-	errStr := strings.ToLower(err.Error())
-
-	// Rate limit errors: wait longer
-	if strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "429") {
-		return time.Duration(attempt+1) * 2 * time.Second
-	}
-
-	// Network errors: exponential backoff
-	if strings.Contains(errStr, "network") || strings.Contains(errStr, "timeout") || strings.Contains(errStr, "connection") {
-		return time.Duration(1<<uint(attempt)) * time.Second
-	}
-
-	// Server errors: linear backoff
-	if strings.Contains(errStr, "500") || strings.Contains(errStr, "502") || 
-	   strings.Contains(errStr, "503") || strings.Contains(errStr, "504") {
-		return time.Duration(attempt+1) * time.Second
-	}
-
-	// Default: no delay (as per requirements for Read Module, but we use adaptive for broker)
-	return time.Duration(attempt) * time.Second
+	bm.logger.Info("Order %s executed successfully: %+v", order.ID, execResult)
+	return execResult, nil
 }
 
 // HealthCheck checks broker health

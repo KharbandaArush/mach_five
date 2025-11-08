@@ -57,4 +57,10 @@ func (a *AlpacaBroker) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
+// ValidateSymbol validates symbol via Alpaca API
+func (a *AlpacaBroker) ValidateSymbol(ctx context.Context, exchange, symbol string) (bool, error) {
+	// TODO: Implement symbol validation via Alpaca API
+	return true, nil
+}
+
 

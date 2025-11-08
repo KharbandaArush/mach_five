@@ -2,7 +2,6 @@ package trigger
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -16,49 +15,59 @@ import (
 
 // Trigger handles order execution
 type Trigger struct {
-	config        *config.Config
-	cache         *cache.RedisCache
-	brokerManager *broker.BrokerManager
-	logger        *logger.Logger
-	workerPool    int
+	config              *config.Config
+	cache               *cache.RedisCache
+	brokerManager       *broker.BrokerManager
+	logger              *logger.Logger
+	workerPool          int
+	istLocation         *time.Location // Cached timezone location
+	healthCheckMu       sync.Mutex     // Mutex to ensure only one health check runs at a time
+	healthCheckInProgress bool         // Flag to track if health check is running
 }
 
 // NewTrigger creates a new trigger instance
 func NewTrigger(cfg *config.Config, cache *cache.RedisCache, brokerMgr *broker.BrokerManager, log *logger.Logger) *Trigger {
+	// Load and cache timezone location once
+	istLocation, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		log.Warn("Failed to load IST timezone, using UTC: %v", err)
+		istLocation = time.UTC
+	}
+	
 	return &Trigger{
 		config:        cfg,
 		cache:         cache,
 		brokerManager: brokerMgr,
 		logger:        log,
 		workerPool:    cfg.Trigger.WorkerPoolSize,
+		istLocation:   istLocation,
 	}
 }
 
 // ExecuteDueOrders executes all orders that are due for execution
 func (t *Trigger) ExecuteDueOrders(ctx context.Context) error {
-	startTime := time.Now()
-	t.logger.Section("🚀 Order Execution Cycle Started")
-
-	// Get current time in IST (orders are scheduled in IST)
-	istLocation, err := time.LoadLocation("Asia/Kolkata")
-	if err != nil {
-		t.logger.Warn("Failed to load IST timezone, using UTC: %v", err)
-		istLocation = time.UTC
-	}
-	now := time.Now().In(istLocation)
-	
-	t.logger.Debug("Checking for orders due at %s IST", now.Format("2006-01-02 15:04:05 IST"))
+	// Get current time in IST using cached location (optimized for 1ms polling)
+	now := time.Now().In(t.istLocation)
 	
 	// Get orders due for execution
 	orders, err := t.cache.GetOrdersDueForExecution(now)
 	if err != nil {
+		t.logger.Error("❌ Failed to get orders due for execution")
+		t.logger.Error("   Current time (IST): %s", now.Format("2006-01-02 15:04:05 IST"))
+		t.logger.Error("   Error: %v", err)
 		return fmt.Errorf("failed to get orders due for execution: %w", err)
 	}
 
+	// Return silently if no orders are due (no logging - critical for 1ms polling)
 	if len(orders) == 0 {
-		t.logger.Info("⏳ No orders due for execution at this time")
 		return nil
 	}
+	
+	startTime := time.Now()
+	t.logger.Debug("Checking for orders due at %s IST", now.Format("2006-01-02 15:04:05 IST"))
+
+	// Only log when there are orders to execute
+	t.logger.Section("🚀 Order Execution Cycle Started")
 
 	t.logger.Success("Found %d orders due for execution", len(orders))
 	
@@ -138,7 +147,11 @@ func (t *Trigger) executeOrder(ctx context.Context, workerID int, order models.O
 	lockTTL := 30 * time.Second
 	acquired, err := t.cache.TryLock(order.ID, lockTTL)
 	if err != nil {
-		t.logger.Error("Failed to acquire lock for order %s: %v", order.ID, err)
+		t.logger.Error("❌ Failed to acquire lock for order %s", order.ID)
+		t.logger.Error("   Order ID: %s", order.ID)
+		t.logger.Error("   Lock TTL: %v", lockTTL)
+		t.logger.Error("   Error: %v", err)
+		t.logger.Error("   Redis connection may be unstable")
 		t.removeOrder(order.ID, "lock acquisition failed")
 		return
 	}
@@ -161,7 +174,7 @@ func (t *Trigger) executeOrder(ctx context.Context, workerID int, order models.O
 
 	// Profile broker connection and execution
 	brokerStart := time.Now()
-	result, err := t.brokerManager.ExecuteOrderWithRetry(ctx, order, 3)
+	result, err := t.brokerManager.ExecuteOrder(ctx, order)
 	metrics.BrokerConnectTime = time.Since(brokerStart)
 	metrics.OrderExecutionTime = metrics.BrokerConnectTime // Combined for simplicity
 
@@ -169,7 +182,16 @@ func (t *Trigger) executeOrder(ctx context.Context, workerID int, order models.O
 		metrics.CompletedAt = time.Now()
 		metrics.TotalTime = time.Since(metrics.StartedAt)
 		t.logProfilingMetrics(metrics, false, err.Error())
-		t.logger.Error("❌ Order %s execution failed: %v", order.ID, err)
+		t.logger.Error("❌ Order %s execution failed", order.ID)
+		t.logger.Error("   Order Details:")
+		t.logger.Error("     - ID: %s", order.ID)
+		t.logger.Error("     - Symbol: %s", order.Symbol)
+		t.logger.Error("     - Side: %s", order.Side)
+		t.logger.Error("     - Quantity: %d", order.Quantity)
+		t.logger.Error("     - Price: %.2f", order.Price)
+		t.logger.Error("     - Scheduled Time: %s", order.ScheduledTime.Format("2006-01-02 15:04:05 IST"))
+		t.logger.Error("   Error: %v", err)
+		t.logger.Error("   Full error details logged by broker module above")
 		t.removeOrder(order.ID, err.Error())
 		return
 	}
@@ -212,49 +234,150 @@ func (t *Trigger) removeOrder(orderID, reason string) {
 	}
 }
 
-// logProfilingMetrics logs profiling metrics as JSON
+// logProfilingMetrics logs profiling metrics in tabular format
 func (t *Trigger) logProfilingMetrics(metrics models.ProfilingMetrics, success bool, errorMsg string) {
-	profileData := map[string]interface{}{
-		"order_id":            metrics.OrderID,
-		"scheduled_time":      metrics.ScheduledTime.Format(time.RFC3339),
-		"scheduler_delay_ms":  metrics.SchedulerDelay.Milliseconds(),
-		"cache_lookup_ms":     metrics.CacheLookupTime.Milliseconds(),
-		"broker_connect_ms":   metrics.BrokerConnectTime.Milliseconds(),
-		"order_execution_ms":  metrics.OrderExecutionTime.Milliseconds(),
-		"cleanup_ms":         metrics.CleanupTime.Milliseconds(),
-		"total_time_ms":       metrics.TotalTime.Milliseconds(),
-		"started_at":          metrics.StartedAt.Format(time.RFC3339),
-		"completed_at":        metrics.CompletedAt.Format(time.RFC3339),
-		"success":             success,
+	// Format times for display
+	scheduledTime := metrics.ScheduledTime.Format("2006-01-02 15:04:05 IST")
+	startedAt := metrics.StartedAt.Format("2006-01-02 15:04:05 IST")
+	completedAt := metrics.CompletedAt.Format("2006-01-02 15:04:05 IST")
+	
+	// Status indicator
+	statusIcon := "✅"
+	statusText := "SUCCESS"
+	if !success {
+		statusIcon = "❌"
+		statusText = "FAILED"
 	}
 
+	// Build table data
+	tableData := map[string]string{
+		"Order ID":            metrics.OrderID,
+		"Status":              fmt.Sprintf("%s %s", statusIcon, statusText),
+		"Scheduled Time":      scheduledTime,
+		"Started At":          startedAt,
+		"Completed At":        completedAt,
+		"Scheduler Delay":     fmt.Sprintf("%d ms", metrics.SchedulerDelay.Milliseconds()),
+		"Cache Lookup":        fmt.Sprintf("%d ms", metrics.CacheLookupTime.Milliseconds()),
+		"Broker Connect":      fmt.Sprintf("%d ms", metrics.BrokerConnectTime.Milliseconds()),
+		"Order Execution":     fmt.Sprintf("%d ms", metrics.OrderExecutionTime.Milliseconds()),
+		"Cleanup":            fmt.Sprintf("%d ms", metrics.CleanupTime.Milliseconds()),
+		"Total Time":          fmt.Sprintf("%d ms", metrics.TotalTime.Milliseconds()),
+	}
+
+	// Add error message if present
 	if errorMsg != "" {
-		profileData["error"] = errorMsg
+		// Truncate long error messages
+		if len(errorMsg) > 100 {
+			errorMsg = errorMsg[:97] + "..."
+		}
+		tableData["Error"] = errorMsg
 	}
 
-	jsonData, err := json.Marshal(profileData)
-	if err != nil {
-		t.logger.Error("Failed to marshal profiling metrics: %v", err)
-		return
-	}
-
-	t.logger.Info("PROFILING: %s", string(jsonData))
+	// Log as table
+	t.logger.Section("📊 Profiling Metrics")
+	t.logger.TableSimple("Order Execution Profile", tableData)
 }
 
 // MaintainSystemReadiness ensures system is ready before execution
 func (t *Trigger) MaintainSystemReadiness(ctx context.Context) error {
 	// Check cache health
 	if err := t.cache.HealthCheck(); err != nil {
+		t.logger.Error("❌ Cache health check failed")
+		t.logger.Error("   Error: %v", err)
+		t.logger.Error("   Redis may be down or unreachable")
 		return fmt.Errorf("cache health check failed: %w", err)
 	}
+	t.logger.Debug("✅ Cache health check passed")
 
 	// Check broker health
+	brokerHealthOk := true
 	if err := t.brokerManager.HealthCheck(ctx); err != nil {
-		return fmt.Errorf("broker health check failed: %w", err)
+		brokerHealthOk = false
+		t.logger.Error("❌ Broker health check failed")
+		t.logger.Error("   Error: %v", err)
+		t.logger.Error("   Broker may be unreachable or credentials invalid")
+		t.logger.Warn("   ⚠️  Orders will still attempt execution, but may fail")
+		// Don't fail completely - allow orders to attempt execution
+		// return fmt.Errorf("broker health check failed: %w", err)
 	}
 
-	t.logger.Debug("System readiness check passed")
+	// Only log success when both checks pass
+	if brokerHealthOk {
+		t.logger.Info("✅ System readiness check passed (cache and broker healthy)")
+	} else {
+		t.logger.Info("⚠️  System readiness check completed (cache healthy, broker unhealthy)")
+	}
+	
 	return nil
+}
+
+// RunContinuous runs the trigger in a continuous loop, checking for orders at regular intervals
+func (t *Trigger) RunContinuous(ctx context.Context) error {
+	checkInterval := t.config.Trigger.CheckInterval
+	healthCheckInterval := t.config.Trigger.HealthCheckInterval
+	
+	t.logger.Info("🔄 Starting continuous trigger loop")
+	t.logger.Info("   Check interval: %v", checkInterval)
+	t.logger.Info("   Health check interval: %v", healthCheckInterval)
+	
+	checkTicker := time.NewTicker(checkInterval)
+	defer checkTicker.Stop()
+	
+	healthCheckTicker := time.NewTicker(healthCheckInterval)
+	defer healthCheckTicker.Stop()
+	
+	lastHealthCheck := time.Now()
+	
+	// Run initial health check
+	if err := t.MaintainSystemReadiness(ctx); err != nil {
+		t.logger.Warn("⚠️  Initial health check failed, will retry: %v", err)
+	}
+	
+	for {
+		select {
+		case <-ctx.Done():
+			t.logger.Info("🛑 Stopping continuous trigger loop")
+			return ctx.Err()
+			
+		case <-checkTicker.C:
+			// Check for due orders
+			if err := t.ExecuteDueOrders(ctx); err != nil {
+				t.logger.Error("❌ Error executing due orders: %v", err)
+				// Continue running even if there's an error
+			}
+			
+		case <-healthCheckTicker.C:
+			// Run periodic health checks (ensure only one runs at a time)
+			if time.Since(lastHealthCheck) >= healthCheckInterval {
+				// Check if health check is already running
+				t.healthCheckMu.Lock()
+				if t.healthCheckInProgress {
+					t.healthCheckMu.Unlock()
+					t.logger.Debug("⏭️  Health check already in progress, skipping")
+				} else {
+					t.healthCheckInProgress = true
+					t.healthCheckMu.Unlock()
+					
+					// Update lastHealthCheck before starting (prevents race condition)
+					lastHealthCheck = time.Now()
+					
+					// Run health check in goroutine to avoid blocking
+					go func() {
+						defer func() {
+							t.healthCheckMu.Lock()
+							t.healthCheckInProgress = false
+							t.healthCheckMu.Unlock()
+						}()
+						
+						t.logger.Debug("🔍 Running periodic health check")
+						if err := t.MaintainSystemReadiness(ctx); err != nil {
+							t.logger.Warn("⚠️  Periodic health check failed: %v", err)
+						}
+					}()
+				}
+			}
+		}
+	}
 }
 
 // truncateString truncates a string to max length

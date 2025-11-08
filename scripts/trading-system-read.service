@@ -16,8 +16,8 @@ StandardError=append:/opt/trading-system/logs/read-module.log
 # Environment variables
 Environment="GOOGLE_SHEETS_CREDENTIALS_PATH=/opt/trading-system/config/google-credentials.json"
 Environment="GOOGLE_SHEET_ID="
-Environment="GOOGLE_SHEET_BUY_RANGE=to_buy!B3:J"
-Environment="GOOGLE_SHEET_SELL_RANGE=to_sell!B3:J"
+Environment="GOOGLE_SHEET_BUY_RANGE=to_buy!B3:K"
+Environment="GOOGLE_SHEET_SELL_RANGE=to_sell!B3:K"
 Environment="GOOGLE_SHEETS_REFRESH_INTERVAL=1m"
 Environment="REDIS_ADDR=localhost:6379"
 Environment="LOG_LEVEL=INFO"

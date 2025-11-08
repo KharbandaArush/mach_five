@@ -35,12 +35,13 @@ type RedisConfig struct {
 
 // BrokerConfig holds broker configuration
 type BrokerConfig struct {
-	ConfigPath string
-	Type       string
-	APIKey     string
-	APISecret  string
-	BaseURL    string
-	RateLimit  RateLimitConfig
+	ConfigPath   string
+	Type         string
+	APIKey       string
+	APISecret    string
+	RefreshToken string // For Kite: refresh token to get new access tokens
+	BaseURL      string
+	RateLimit    RateLimitConfig
 }
 
 // RateLimitConfig holds rate limiting configuration
@@ -59,7 +60,9 @@ type LoggingConfig struct {
 
 // TriggerConfig holds trigger module configuration
 type TriggerConfig struct {
-	WorkerPoolSize int
+	WorkerPoolSize    int
+	CheckInterval     time.Duration // How often to check for due orders
+	HealthCheckInterval time.Duration // How often to run health checks
 }
 
 // LoadConfig loads configuration from environment variables
@@ -69,8 +72,8 @@ func LoadConfig() (*Config, error) {
 	// Google Sheets config
 	cfg.GoogleSheets.CredentialsPath = getEnv("GOOGLE_SHEETS_CREDENTIALS_PATH", "./config/google-credentials.json")
 	cfg.GoogleSheets.SheetID = getEnv("GOOGLE_SHEET_ID", "")
-	cfg.GoogleSheets.BuyRange = getEnv("GOOGLE_SHEET_BUY_RANGE", "to_buy!B3:J")
-	cfg.GoogleSheets.SellRange = getEnv("GOOGLE_SHEET_SELL_RANGE", "to_sell!B3:J")
+	cfg.GoogleSheets.BuyRange = getEnv("GOOGLE_SHEET_BUY_RANGE", "to_buy!B3:K")
+	cfg.GoogleSheets.SellRange = getEnv("GOOGLE_SHEET_SELL_RANGE", "to_sell!B3:K")
 	refreshInterval := getEnv("GOOGLE_SHEETS_REFRESH_INTERVAL", "1m")
 	var err error
 	cfg.GoogleSheets.RefreshInterval, err = time.ParseDuration(refreshInterval)
@@ -88,6 +91,7 @@ func LoadConfig() (*Config, error) {
 	cfg.Broker.Type = getEnv("BROKER_TYPE", "mock")
 	cfg.Broker.APIKey = getEnv("BROKER_API_KEY", "")
 	cfg.Broker.APISecret = getEnv("BROKER_API_SECRET", "")
+	cfg.Broker.RefreshToken = getEnv("BROKER_REFRESH_TOKEN", "")
 	cfg.Broker.BaseURL = getEnv("BROKER_BASE_URL", "")
 
 	// Rate limit config
@@ -104,6 +108,20 @@ func LoadConfig() (*Config, error) {
 	cfg.Trigger.WorkerPoolSize, _ = strconv.Atoi(getEnv("WORKER_POOL_SIZE", "5"))
 	if cfg.Trigger.WorkerPoolSize <= 0 {
 		cfg.Trigger.WorkerPoolSize = 5
+	}
+	
+	// Trigger check interval (how often to check for due orders)
+	checkInterval := getEnv("TRIGGER_CHECK_INTERVAL", "1m")
+	cfg.Trigger.CheckInterval, err = time.ParseDuration(checkInterval)
+	if err != nil {
+		cfg.Trigger.CheckInterval = 1 * time.Minute
+	}
+	
+	// Health check interval (how often to run system readiness checks)
+	healthCheckInterval := getEnv("TRIGGER_HEALTH_CHECK_INTERVAL", "30s")
+	cfg.Trigger.HealthCheckInterval, err = time.ParseDuration(healthCheckInterval)
+	if err != nil {
+		cfg.Trigger.HealthCheckInterval = 30 * time.Second
 	}
 
 	// Load broker config from file if path is provided
@@ -127,11 +145,12 @@ func (c *Config) loadBrokerConfigFromFile() error {
 	}
 
 	var fileConfig struct {
-		Type      string          `json:"type"`
-		APIKey    string          `json:"api_key"`
-		APISecret string          `json:"api_secret"`
-		BaseURL   string          `json:"base_url"`
-		RateLimit RateLimitConfig `json:"rate_limit"`
+		Type         string          `json:"type"`
+		APIKey       string          `json:"api_key"`
+		APISecret    string          `json:"api_secret"`
+		RefreshToken string          `json:"refresh_token"`
+		BaseURL      string          `json:"base_url"`
+		RateLimit    RateLimitConfig `json:"rate_limit"`
 	}
 
 	if err := json.Unmarshal(data, &fileConfig); err != nil {
@@ -147,6 +166,9 @@ func (c *Config) loadBrokerConfigFromFile() error {
 	}
 	if fileConfig.APISecret != "" {
 		c.Broker.APISecret = fileConfig.APISecret
+	}
+	if fileConfig.RefreshToken != "" {
+		c.Broker.RefreshToken = fileConfig.RefreshToken
 	}
 	if fileConfig.BaseURL != "" {
 		c.Broker.BaseURL = fileConfig.BaseURL

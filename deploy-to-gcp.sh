@@ -72,6 +72,8 @@ cp config/google-credentials.json.example "$DEPLOY_DIR/config/google-credentials
 # Copy scripts
 cp scripts/setup-cron.sh "$DEPLOY_DIR/scripts/"
 cp scripts/install-redis.sh "$DEPLOY_DIR/scripts/"
+cp scripts/refresh-token.sh "$DEPLOY_DIR/scripts/"
+cp scripts/update-access-token.sh "$DEPLOY_DIR/scripts/"
 cp scripts/trading-system-read.service "$DEPLOY_DIR/scripts/"
 cp scripts/trading-system-trigger.service "$DEPLOY_DIR/scripts/"
 chmod +x "$DEPLOY_DIR/scripts/"*.sh

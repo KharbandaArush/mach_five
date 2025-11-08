@@ -1,10 +1,12 @@
 [Unit]
-Description=Trading System Trigger Module (via Cron)
+Description=Trading System Trigger Module (Continuous Service)
 After=network.target redis.service
 Requires=redis.service
 
 [Service]
-Type=oneshot
+Type=simple
+Restart=always
+RestartSec=10
 User=root
 WorkingDirectory=/opt/trading-system
 ExecStart=/opt/trading-system/bin/trading-system -module=trigger
@@ -17,6 +19,8 @@ Environment="REDIS_ADDR=localhost:6379"
 Environment="LOG_LEVEL=INFO"
 Environment="TRIGGER_LOG_PATH=/opt/trading-system/logs/trigger-module.log"
 Environment="WORKER_POOL_SIZE=5"
+Environment="TRIGGER_CHECK_INTERVAL=1ms"
+Environment="TRIGGER_HEALTH_CHECK_INTERVAL=1m"
 
 [Install]
 WantedBy=multi-user.target

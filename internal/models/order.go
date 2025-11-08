@@ -9,12 +9,14 @@ import (
 type Order struct {
 	ID            string    `json:"id"`
 	Symbol        string    `json:"symbol"`
+	Exchange      string    `json:"exchange"`   // Exchange (NSE, BSE, etc.)
 	Price         float64   `json:"price"`
 	Quantity      int       `json:"quantity"`
 	OrderType     string    `json:"order_type"` // Market, Limit
 	Side          string    `json:"side"`       // Buy, Sell
 	ScheduledTime time.Time `json:"scheduled_time"`
 	CreatedAt     time.Time `json:"created_at"`
+	IsAMO         bool      `json:"is_amo"`     // Whether this order should be placed as After Market Order
 }
 
 // OrderCacheEntry represents an order stored in cache

@@ -2,7 +2,6 @@ package logger
 
 import (
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -29,8 +28,9 @@ func NewLogger(level, logPath string) (*Logger, error) {
 		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
 
-	multiWriter := io.MultiWriter(os.Stdout, file)
-	logger := log.New(multiWriter, "", log.LstdFlags|log.Lmicroseconds)
+	// Write only to file - systemd will capture stdout/stderr separately
+	// This prevents duplicate logs (logger writes to file, systemd also captures stdout)
+	logger := log.New(file, "", log.LstdFlags|log.Lmicroseconds)
 
 	return &Logger{
 		level:  strings.ToUpper(level),
@@ -198,6 +198,11 @@ func (l *Logger) Section(title string) {
 	l.logger.Printf("╔══════════════════════════════════════════════════════════════╗")
 	l.logger.Printf("║ %-60s ║", truncate(title, 60))
 	l.logger.Printf("╚══════════════════════════════════════════════════════════════╝")
+}
+
+// IsDebug returns true if logger is in DEBUG mode
+func (l *Logger) IsDebug() bool {
+	return l.level == "DEBUG"
 }
 
 // truncate truncates a string to max length

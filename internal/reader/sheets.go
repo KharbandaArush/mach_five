@@ -31,29 +31,58 @@ func NewSheetsReader(cfg *config.Config, cache *cache.RedisCache, log *logger.Lo
 	ctx := context.Background()
 
 	// Load credentials
-	credData, err := os.ReadFile(cfg.GoogleSheets.CredentialsPath)
+	credentialsPath := cfg.GoogleSheets.CredentialsPath
+	log.Debug("📂 Loading Google credentials from: %s", credentialsPath)
+	
+	credData, err := os.ReadFile(credentialsPath)
 	if err != nil {
+		log.Error("❌ Failed to read Google credentials file")
+		log.Error("   Path: %s", credentialsPath)
+		log.Error("   Error: %v", err)
+		log.Error("   💡 Check if file exists and is readable")
 		return nil, fmt.Errorf("failed to read credentials file: %w", err)
 	}
 
 	// Parse credentials
+	log.Debug("🔐 Parsing Google credentials JSON")
 	creds, err := google.CredentialsFromJSON(ctx, credData, sheets.SpreadsheetsReadonlyScope)
 	if err != nil {
+		log.Error("❌ Failed to parse Google credentials")
+		log.Error("   Path: %s", credentialsPath)
+		log.Error("   Error: %v", err)
+		log.Error("   💡 Credentials file may be corrupted or invalid")
+		log.Error("   💡 Re-download from Google Cloud Console if needed")
 		return nil, fmt.Errorf("failed to parse credentials: %w", err)
 	}
 
 	// Create sheets service
+	log.Debug("🔗 Creating Google Sheets API client")
 	srv, err := sheets.NewService(ctx, option.WithCredentials(creds))
 	if err != nil {
+		log.Error("❌ Failed to create Google Sheets service")
+		log.Error("   Error: %v", err)
+		log.Error("   💡 Check network connectivity and API access")
 		return nil, fmt.Errorf("failed to create sheets service: %w", err)
 	}
+	
+	log.Debug("✅ Google Sheets service created successfully")
+
+	// Validate sheet ID
+	sheetID := cfg.GoogleSheets.SheetID
+	if sheetID == "" {
+		log.Error("❌ Google Sheet ID is not set")
+		log.Error("   Set GOOGLE_SHEET_ID environment variable or in config")
+		return nil, fmt.Errorf("Google Sheet ID is required")
+	}
+	
+	log.Debug("📊 Using Google Sheet ID: %s", sheetID)
 
 	return &SheetsReader{
 		config:  cfg,
 		cache:   cache,
 		logger:  log,
 		service: srv,
-		sheetID: cfg.GoogleSheets.SheetID,
+		sheetID: sheetID,
 	}, nil
 }
 
@@ -95,9 +124,12 @@ func (r *SheetsReader) readAndCacheOrders() error {
 	r.logger.Debug("Reading buy orders from sheet: %s, range: %s", r.sheetID, r.config.GoogleSheets.BuyRange)
 	buyOrders, err := r.readSheet(r.config.GoogleSheets.BuyRange, "Buy")
 	if err != nil {
-		r.logger.Error("Failed to read buy orders: %v", err)
+		r.logger.Error("❌ Failed to read buy orders: %v", err)
+		r.logger.Error("   Sheet ID: %s", r.sheetID)
+		r.logger.Error("   Range: %s", r.config.GoogleSheets.BuyRange)
+		r.logger.Error("   Full error details logged above")
 	} else {
-		r.logger.Success("Read %d buy orders from to_buy sheet", len(buyOrders))
+		r.logger.Success("✅ Read %d buy orders from to_buy sheet", len(buyOrders))
 		allOrders = append(allOrders, buyOrders...)
 	}
 
@@ -105,9 +137,12 @@ func (r *SheetsReader) readAndCacheOrders() error {
 	r.logger.Debug("Reading sell orders from sheet: %s, range: %s", r.sheetID, r.config.GoogleSheets.SellRange)
 	sellOrders, err := r.readSheet(r.config.GoogleSheets.SellRange, "Sell")
 	if err != nil {
-		r.logger.Error("Failed to read sell orders: %v", err)
+		r.logger.Error("❌ Failed to read sell orders: %v", err)
+		r.logger.Error("   Sheet ID: %s", r.sheetID)
+		r.logger.Error("   Range: %s", r.config.GoogleSheets.SellRange)
+		r.logger.Error("   Full error details logged above")
 	} else {
-		r.logger.Success("Read %d sell orders from to_sell sheet", len(sellOrders))
+		r.logger.Success("✅ Read %d sell orders from to_sell sheet", len(sellOrders))
 		allOrders = append(allOrders, sellOrders...)
 	}
 
@@ -127,8 +162,12 @@ func (r *SheetsReader) readAndCacheOrders() error {
 			r.logger.Error("Failed to cache order %s: %v", order.ID, err)
 			continue
 		}
-		r.logger.Debug("Cached order: %s, side: %s, symbol: %s, scheduled: %s, expiry: %s", 
-			order.ID, order.Side, order.Symbol, order.ScheduledTime.Format(time.RFC3339), expiryTime.Format(time.RFC3339))
+		amoStatus := "Regular"
+		if order.IsAMO {
+			amoStatus = "AMO"
+		}
+		r.logger.Debug("Cached order: %s, side: %s, exchange: %s, symbol: %s, scheduled: %s, type: %s, expiry: %s", 
+			order.ID, order.Side, order.Exchange, order.Symbol, order.ScheduledTime.Format(time.RFC3339), amoStatus, expiryTime.Format(time.RFC3339))
 	}
 
 	return nil
@@ -136,8 +175,31 @@ func (r *SheetsReader) readAndCacheOrders() error {
 
 // readSheet reads orders from a specific sheet range
 func (r *SheetsReader) readSheet(rangeStr, side string) ([]models.Order, error) {
+	r.logger.Debug("📖 Reading %s orders from sheet: %s, range: %s", side, r.sheetID, rangeStr)
+	
 	resp, err := r.service.Spreadsheets.Values.Get(r.sheetID, rangeStr).Do()
 	if err != nil {
+		r.logger.Error("❌ Failed to read %s orders from Google Sheets", side)
+		r.logger.Error("   Sheet ID: %s", r.sheetID)
+		r.logger.Error("   Range: %s", rangeStr)
+		r.logger.Error("   Error: %v", err)
+		
+		// Try to extract more details from the error
+		if strings.Contains(err.Error(), "404") {
+			r.logger.Error("   💡 This is a 404 error - possible causes:")
+			r.logger.Error("      - Sheet tab '%s' does not exist", strings.Split(rangeStr, "!")[0])
+			r.logger.Error("      - Sheet ID is incorrect")
+			r.logger.Error("      - Service account doesn't have access to the sheet")
+		} else if strings.Contains(err.Error(), "403") {
+			r.logger.Error("   💡 This is a 403 error - permission denied:")
+			r.logger.Error("      - Service account needs access to the sheet")
+			r.logger.Error("      - Check sharing permissions in Google Sheets")
+		} else if strings.Contains(err.Error(), "401") {
+			r.logger.Error("   💡 This is a 401 error - authentication failed:")
+			r.logger.Error("      - Google credentials may be invalid or expired")
+			r.logger.Error("      - Check google-credentials.json file")
+		}
+		
 		return nil, fmt.Errorf("failed to read sheet range %s: %w", rangeStr, err)
 	}
 
@@ -157,7 +219,7 @@ func (r *SheetsReader) readSheet(rangeStr, side string) ([]models.Order, error) 
 }
 
 // parseRows parses sheet rows into Order objects
-// Column mapping (B through J):
+// Column mapping (B through L):
 // B: planned_buy_price (float) - Price
 // C: product (string) - Product type
 // D: Name (string) - Stock name
@@ -165,8 +227,12 @@ func (r *SheetsReader) readSheet(rangeStr, side string) ([]models.Order, error) 
 // F: symbol (string) - Trading symbol
 // G: execute_date (string) - Date (YYYY-MM-DD)
 // H: execute_time (string) - Time (HH:MM:SS or HH:MM)
-// I: Money Needed (float) - Money required
-// J: Lots (int) - Quantity
+// I: Money Needed (float) - Money required (used to calculate quantity if quantity column not present)
+// J: Lots (int) - Number of orders to place
+// K: exchange (string) - Exchange (NSE, BSE, etc.)
+// L: quantity (int, optional) - Total quantity to distribute across lots
+// Note: If lots > 1, total quantity (q) is distributed as: floor(q/n) base quantity,
+//       with mod(q/n) orders getting floor(q/n) + 1 to ensure total quantity is used
 func (r *SheetsReader) parseRows(rows [][]interface{}, side string) ([]models.Order, error) {
 	var orders []models.Order
 	// Get current time - we'll use IST for comparison
@@ -178,9 +244,9 @@ func (r *SheetsReader) parseRows(rows [][]interface{}, side string) ([]models.Or
 	now := time.Now().In(istLocation)
 
 	for i, row := range rows {
-		// Need at least 9 columns (B through J, indexed 0-8)
-		if len(row) < 9 {
-			r.logger.Warn("Row %d has insufficient columns (%d), skipping", i+3, len(row))
+		// Need at least 10 columns (B through K, indexed 0-9)
+		if len(row) < 10 {
+			r.logger.Warn("Row %d has insufficient columns (%d), need at least 10 (B-K), skipping", i+3, len(row))
 			continue
 		}
 
@@ -253,17 +319,70 @@ func (r *SheetsReader) parseRows(rows [][]interface{}, side string) ([]models.Or
 			continue
 		}
 
-		// Column I (index 7): Money Needed - not used directly but logged
+		// Column I (index 7): Money Needed - used to calculate total quantity if quantity column not present
 		moneyNeededStr := strings.TrimSpace(fmt.Sprintf("%v", row[7]))
 		moneyNeeded, _ := strconv.ParseFloat(moneyNeededStr, 64)
 
-		// Column J (index 8): Lots (quantity)
+		// Column J (index 8): Lots (number of orders to place)
 		lotsStr := strings.TrimSpace(fmt.Sprintf("%v", row[8]))
-		quantity, qtyErr := strconv.Atoi(lotsStr)
-		if qtyErr != nil || quantity <= 0 {
+		lots, lotsErr := strconv.Atoi(lotsStr)
+		if lotsErr != nil || lots <= 0 {
 			r.logger.Warn("Row %d: invalid lots '%s', defaulting to 1", i+3, lotsStr)
-			quantity = 1
+			lots = 1
 		}
+		
+		// Calculate total quantity (q)
+		// If there's a quantity column (index 10), use it; otherwise calculate from Money Needed / Price
+		var totalQuantity int
+		if len(row) > 10 {
+			// Column L (index 10): Quantity (if present)
+			quantityStr := strings.TrimSpace(fmt.Sprintf("%v", row[10]))
+			if quantityStr != "" {
+				if qty, err := strconv.Atoi(quantityStr); err == nil && qty > 0 {
+					totalQuantity = qty
+				} else {
+					// Invalid quantity, calculate from Money Needed / Price
+					if price > 0 {
+						totalQuantity = int(moneyNeeded / price)
+					} else {
+						totalQuantity = 1 // Default if price is 0
+					}
+				}
+			} else {
+				// No quantity column, calculate from Money Needed / Price
+				if price > 0 {
+					totalQuantity = int(moneyNeeded / price)
+				} else {
+					totalQuantity = 1 // Default if price is 0
+				}
+			}
+		} else {
+			// No quantity column, calculate from Money Needed / Price
+			if price > 0 {
+				totalQuantity = int(moneyNeeded / price)
+			} else {
+				totalQuantity = 1 // Default if price is 0
+			}
+		}
+		
+		// Ensure totalQuantity is at least 1
+		if totalQuantity <= 0 {
+			totalQuantity = 1
+		}
+		
+		// Calculate quantity distribution across lots
+		// floor(q/n) for base quantity, mod(q/n) orders get +1
+		baseQuantity := totalQuantity / lots
+		remainder := totalQuantity % lots
+
+		// Column K (index 9): exchange
+		exchange := strings.TrimSpace(fmt.Sprintf("%v", row[9]))
+		if exchange == "" {
+			r.logger.Debug("Row %d: empty exchange, defaulting to NSE", i+3)
+			exchange = "NSE" // Default to NSE if not specified
+		}
+		// Normalize exchange to uppercase
+		exchange = strings.ToUpper(exchange)
 
 		// Load IST timezone (Asia/Kolkata)
 		istLocation, err := time.LoadLocation("Asia/Kolkata")
@@ -289,25 +408,83 @@ func (r *SheetsReader) parseRows(rows [][]interface{}, side string) ([]models.Or
 			continue
 		}
 
-		// Create order
-		order := models.Order{
-			ID:            models.GenerateOrderID(symbol, scheduledTime),
-			Symbol:        symbol,
-			Price:         price,
-			Quantity:      quantity,
-			OrderType:     "LIMIT", // Default to LIMIT as we have a price
-			Side:          side,
-			ScheduledTime: scheduledTime,
-			CreatedAt:     now,
+		// Determine if this order should be placed as AMO based on scheduled time
+		// Market hours: 9:00 AM - 3:30 PM IST (any day of the week)
+		isAMO := r.shouldUseAMO(scheduledTime)
+
+		// Create multiple orders based on lots value
+		// Distribute totalQuantity across lots orders:
+		// - baseQuantity = floor(totalQuantity / lots)
+		// - remainder orders get baseQuantity + 1
+		for orderNum := 1; orderNum <= lots; orderNum++ {
+			// Calculate quantity for this order
+			// First 'remainder' orders get baseQuantity + 1, rest get baseQuantity
+			orderQuantity := baseQuantity
+			if orderNum <= remainder {
+				orderQuantity = baseQuantity + 1
+			}
+			
+			// Generate unique order ID by appending order number
+			orderID := models.GenerateOrderID(symbol, scheduledTime)
+			if lots > 1 {
+				// Append order number to make each order unique
+				orderID = fmt.Sprintf("%s-%d", orderID, orderNum)
+			}
+			
+			order := models.Order{
+				ID:            orderID,
+				Symbol:        symbol,
+				Exchange:      exchange,
+				Price:         price,
+				Quantity:      orderQuantity,
+				OrderType:     "LIMIT", // Default to LIMIT as we have a price
+				Side:          side,
+				ScheduledTime: scheduledTime,
+				CreatedAt:     now,
+				IsAMO:         isAMO,
+			}
+
+			if isAMO {
+				r.logger.Debug("Row %d, Order %d/%d: Scheduled for %s IST (market closed) - marked as AMO", 
+					i+3, orderNum, lots, scheduledTime.Format("2006-01-02 15:04:05 IST"))
+			}
+
+			r.logger.Debug("Parsed order %d/%d: %s, Exchange: %s, Symbol: %s, Name: %s, BSE: %s, Product: %s, Money: %.2f, Quantity: %d, Lots: %d, Total Qty: %d", 
+				orderNum, lots, order.ID, exchange, symbol, name, bseCode, product, moneyNeeded, orderQuantity, lots, totalQuantity)
+
+			orders = append(orders, order)
 		}
-
-		r.logger.Debug("Parsed order: %s, Name: %s, BSE: %s, Product: %s, Money: %.2f, Lots: %d", 
-			order.ID, name, bseCode, product, moneyNeeded, quantity)
-
-		orders = append(orders, order)
+		
+		if lots > 1 {
+			r.logger.Info("Row %d: Created %d orders (lots=%d, total qty=%d, base=%d, remainder=%d) for %s", 
+				i+3, lots, lots, totalQuantity, baseQuantity, remainder, symbol)
+		}
 	}
 
 	return orders, nil
+}
+
+// shouldUseAMO determines if an order should be placed as AMO based on scheduled time
+// Market hours: 9:00 AM - 3:30 PM IST (any day of the week)
+func (r *SheetsReader) shouldUseAMO(scheduledTime time.Time) bool {
+	istLocation, err := time.LoadLocation("Asia/Kolkata")
+	if err != nil {
+		r.logger.Warn("Failed to load IST timezone: %v", err)
+		istLocation = time.UTC
+	}
+	istTime := scheduledTime.In(istLocation)
+
+	// Get time in minutes from midnight
+	hour := istTime.Hour()
+	minute := istTime.Minute()
+	minutesFromMidnight := hour*60 + minute
+
+	// Market hours: 9:00 AM (540 minutes) to 3:30 PM (930 minutes)
+	openTime := 9*60 + 0   // 9:00 AM = 540 minutes
+	closeTime := 15*60 + 30 // 3:30 PM = 930 minutes
+
+	// If outside market hours, use AMO
+	return minutesFromMidnight < openTime || minutesFromMidnight >= closeTime
 }
 
 // HealthCheck checks if Google Sheets is accessible
